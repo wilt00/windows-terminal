@@ -40,6 +40,7 @@ class TerminalCoreUnitTests::TerminalBufferTests final
     TEST_METHOD(TestWrappingALongString);
 
     TEST_METHOD(DontSnapToOutputTest);
+    TEST_METHOD(EraseScrollbackSnapsToOutputTest);
 
     TEST_METHOD(TestResetClearTabStops);
 
@@ -249,6 +250,36 @@ void TerminalBufferTests::DontSnapToOutputTest()
     VERIFY_ARE_EQUAL(0, seventhView.Top());
     VERIFY_ARE_EQUAL(TerminalViewHeight, seventhView.BottomExclusive());
     VERIFY_ARE_EQUAL(TerminalHistoryLength, term->_scrollOffset);
+}
+
+void TerminalBufferTests::EraseScrollbackSnapsToOutputTest()
+{
+    auto& termSm = *term->_stateMachine;
+
+    for (auto i = 0; i < TerminalViewHeight + 8 - 1; i++)
+    {
+        termSm.ProcessString(L"x\n");
+    }
+
+    VERIFY_ARE_EQUAL(8, term->_mutableViewport.Top());
+
+    Log::Comment(L"Scroll up one line, then erase the scrollback");
+    term->UserScrollViewport(7);
+    VERIFY_ARE_EQUAL(1, term->_scrollOffset);
+
+    termSm.ProcessString(L"\x1b[3J");
+
+    VERIFY_ARE_EQUAL(0, term->_mutableViewport.Top());
+    VERIFY_ARE_EQUAL(0, term->_scrollOffset);
+
+    Log::Comment(L"Output should follow the mutable viewport after the erase");
+    for (auto i = 0; i < 8; i++)
+    {
+        termSm.ProcessString(L"x\n");
+    }
+
+    VERIFY_ARE_EQUAL(8, term->_mutableViewport.Top());
+    VERIFY_ARE_EQUAL(8, term->GetViewport().Top());
 }
 
 void TerminalBufferTests::_SetTabStops(std::list<til::CoordType> columns, bool replace)

@@ -59,6 +59,7 @@ try
         const auto viewportDelta = position.y - _GetMutableViewport().Origin().y;
         _mutableViewport = Viewport::FromDimensions(position, viewSize);
         _PreserveUserScrollOffset(viewportDelta);
+        _scrollOffset = std::min(_scrollOffset, position.y);
         _NotifyScrollEvent();
     }
 }
