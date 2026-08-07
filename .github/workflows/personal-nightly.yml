@@ -1,0 +1,224 @@
+name: Personal nightly
+
+on:
+  schedule:
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: personal-nightly
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync upstream branches
+    runs-on: ubuntu-latest
+    outputs:
+      personal_sha: ${{ steps.metadata.outputs.personal_sha }}
+      package_version: ${{ steps.metadata.outputs.package_version }}
+    steps:
+      - name: Check out personal
+        uses: actions/checkout@v4
+        with:
+          ref: personal
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror upstream main and update personal
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/microsoft/terminal.git 2>/dev/null || true
+          git fetch upstream main
+
+          # The fork's main branch is always exactly the upstream main commit.
+          git push origin upstream/main:refs/heads/main --force
+
+          # Feature branch tips remain stable. Personal receives upstream through merges.
+          git checkout -B personal origin/personal
+          git merge --no-edit upstream/main
+          git push origin personal
+
+          package_version="$(date -u +%y).$(date -u +%-m%d).${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          echo "personal_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
+
+  build-test-release:
+    name: Build, test, and publish x64
+    needs: sync
+    runs-on: windows-2025
+    timeout-minutes: 360
+    env:
+      PACKAGE_VERSION: ${{ needs.sync.outputs.package_version }}
+      PERSONAL_SHA: ${{ needs.sync.outputs.personal_sha }}
+      PFX_PASSWORD: ${{ secrets.NIGHTLY_SIGNING_PASSWORD }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CL_MPCount: '2'
+    steps:
+      - name: Check out updated personal
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.personal_sha }}
+          fetch-depth: 0
+          submodules: true
+
+      - name: Add 64-bit MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+        with:
+          vs-version: '[17.0,19.0)'
+          msbuild-architecture: x64
+
+      - name: Restore persistent signing certificate
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.NIGHTLY_SIGNING_PFX }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PFX_BASE64) -or [string]::IsNullOrWhiteSpace($env:PFX_PASSWORD)) {
+              throw 'NIGHTLY_SIGNING_PFX and NIGHTLY_SIGNING_PASSWORD must be configured as repository secrets.'
+          }
+          $pfxPath = 'src/cascadia/CascadiaPackage/CascadiaPackage_TemporaryKey.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:PFX_BASE64))
+          $flags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
+          $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, $env:PFX_PASSWORD, $flags)
+          if ($cert.Subject -ne 'CN=wilt00') {
+              throw "Unexpected signing certificate subject: $($cert.Subject)"
+          }
+          New-Item artifacts/release -ItemType Directory -Force | Out-Null
+          $cerPath = 'artifacts/release/WindowsTerminalPersonal.cer'
+          [IO.File]::WriteAllBytes(
+              $cerPath,
+              $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+          Import-Certificate -FilePath $cerPath -CertStoreLocation 'Cert:\CurrentUser\TrustedPeople' | Out-Null
+
+      - name: Set package version and generate notices
+        shell: pwsh
+        run: |
+          $manifestPath = 'src/cascadia/CascadiaPackage/Package-Dev.appxmanifest'
+          [xml]$manifest = Get-Content $manifestPath
+          $manifest.Package.Identity.Version = $env:PACKAGE_VERSION
+          $manifest.Save((Resolve-Path $manifestPath))
+          ./build/scripts/Generate-ThirdPartyNotices.ps1 `
+              -MarkdownNoticePath ./NOTICE.md `
+              -OutputPath ./src/cascadia/CascadiaPackage/NOTICE.html
+
+      - name: Configure vcpkg
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vsRoot = & $vswhere -latest -prerelease -products * -requires Microsoft.VisualStudio.Component.Vcpkg -property installationPath
+          if ($vsRoot -and (Test-Path "$vsRoot/VC/vcpkg/vcpkg.exe")) {
+              $vcpkgRoot = "$vsRoot/VC/vcpkg"
+          } else {
+              git clone --depth 1 https://github.com/microsoft/vcpkg.git dep/vcpkg
+              ./dep/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+              $vcpkgRoot = (Resolve-Path dep/vcpkg).Path
+          }
+          "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
+
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: |
+          ./dep/nuget/nuget.exe restore OpenConsole.slnx -NonInteractive
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./dep/nuget/nuget.exe restore dep/nuget/packages.config -PackagesDirectory packages -NonInteractive
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./dep/nuget/nuget.exe restore build/packages.config -PackagesDirectory packages -NonInteractive
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./build/scripts/Set-LatestVCToolsVersion.ps1
+
+      - name: Build Release package and TerminalCore tests
+        shell: pwsh
+        run: |
+          $arguments = @(
+              'OpenConsole.slnx',
+              '/t:Terminal\CascadiaPackage;Terminal\UnitTests_TerminalCore',
+              '/p:Configuration=Release',
+              '/p:Platform=x64',
+              '/p:WindowsTerminalOfficialBuild=true',
+              '/p:WindowsTerminalBranding=Dev',
+              '/p:GenerateAppxPackageOnBuild=true',
+              '/p:AppxBundle=Never',
+              '/p:UapAppxPackageBuildMode=SideloadOnly',
+              '/p:AppxSymbolPackageEnabled=false',
+              "/p:PackageCertificatePassword=$env:PFX_PASSWORD",
+              '/p:AppxPackageDir=artifacts\AppPackages\',
+              '/p:CL_MPCount=2',
+              '/m:2',
+              '/nr:false'
+          )
+          & msbuild @arguments
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Run TerminalCore unit tests
+        shell: pwsh
+        run: |
+          ./build/scripts/Run-Tests.ps1 `
+              -MatchPattern 'Terminal.Core.Unit.Tests.dll' `
+              -Platform x64 `
+              -Configuration Release `
+              -Root ./bin/x64/Release `
+              -LogPath ./artifacts/terminal-core-tests.wtl
+
+      - name: Create and sign MSIX bundle
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem artifacts/AppPackages -Recurse -Filter 'CascadiaPackage*.msix' -File)
+          if ($packages.Count -ne 1) {
+              throw "Expected exactly one CascadiaPackage MSIX, found $($packages.Count)."
+          }
+          $bundle = "artifacts/release/WindowsTerminalPersonal_$env:PACKAGE_VERSION`_x64.msixbundle"
+          ./build/scripts/Create-AppxBundle.ps1 `
+              -InputPath artifacts/AppPackages `
+              -ProjectName CascadiaPackage `
+              -BundleVersion $env:PACKAGE_VERSION `
+              -OutputPath $bundle
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+          $signTool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/signtool.exe" |
+              Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+          & $signTool sign /fd SHA256 /f src/cascadia/CascadiaPackage/CascadiaPackage_TemporaryKey.pfx /p $env:PFX_PASSWORD $bundle
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $signTool verify /pa $bundle
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+          Get-ChildItem artifacts/AppPackages -Recurse -Filter 'Microsoft.UI.Xaml*.appx' -File |
+              Where-Object FullName -Match '[\\/]x64[\\/]' |
+              Select-Object -First 1 |
+              Copy-Item -Destination artifacts/release
+          Copy-Item tools/Install-TerminalNightly.ps1 artifacts/release
+
+      - name: Upload build and test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-test-results-${{ needs.sync.outputs.package_version }}
+          path: artifacts/terminal-core-tests.wtl
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Publish versioned prerelease
+        shell: pwsh
+        run: |
+          $tag = "nightly-v$env:PACKAGE_VERSION"
+          $notes = @"
+          Automated personal build from commit $env:PERSONAL_SHA.
+
+          This x64 MSIX bundle uses the stable `CN=wilt00` nightly signing certificate. For a first install, download all assets into one directory and run:
+
+          ``powershell.exe -ExecutionPolicy Bypass -File .\Install-TerminalNightly.ps1``
+
+          The versioned `.msixbundle` asset and stable package identity are suitable for a future custom WinGet manifest. The signing certificate only needs to be trusted once per machine.
+          "@
+          gh release create $tag artifacts/release/* `
+              --repo $env:GITHUB_REPOSITORY `
+              --target $env:PERSONAL_SHA `
+              --title "Windows Terminal Personal $env:PACKAGE_VERSION" `
+              --notes $notes `
+              --prerelease
