@@ -256,26 +256,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Publish versioned prerelease
-        shell: pwsh
-        run: |
-          $tag = "nightly-v$env:PACKAGE_VERSION"
-          $notes = @"
-          Automated personal build from commit $env:PERSONAL_SHA.
-
-          This x64 MSIX bundle uses the stable `CN=wilt00` nightly signing certificate. For a first install, download all assets into one directory and run:
-
-          ``powershell.exe -ExecutionPolicy Bypass -File .\Install-TerminalNightly.ps1``
-
-          Install through the stable [App Installer feed](https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/personal/WindowsTerminalPersonal.appinstaller) to receive automatic updates. The signing certificate only needs to be trusted once per machine.
-          "@
-          gh release create $tag artifacts/release/* `
-              --repo $env:GITHUB_REPOSITORY `
-              --target $env:PERSONAL_SHA `
-              --title "Windows Terminal Personal $env:PACKAGE_VERSION" `
-              --notes $notes `
-              --prerelease
-
       - name: Publish App Installer feed
         shell: pwsh
         run: |
@@ -332,3 +312,17 @@ jobs:
           git add -- $appInstallerPath
           git commit -m "Update App Installer feed to $env:PACKAGE_VERSION"
           git push origin HEAD:personal
+
+      - name: Publish versioned prerelease
+        shell: pwsh
+        run: |
+          $tag = "nightly-v$env:PACKAGE_VERSION"
+          $notes = @"
+          Install through the stable [App Installer feed](https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/personal/WindowsTerminalPersonal.appinstaller) to receive automatic updates.
+          "@
+          gh release create $tag artifacts/release/* `
+              --repo $env:GITHUB_REPOSITORY `
+              --target $env:PERSONAL_SHA `
+              --title "Windows Terminal Personal $env:PACKAGE_VERSION" `
+              --notes $notes `
+              --prerelease
