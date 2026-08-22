@@ -94,7 +94,10 @@ jobs:
           [IO.File]::WriteAllBytes(
               $cerPath,
               $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+          # TrustedPeople permits MSIX installation; Root lets SignTool /pa validate
+          # the complete chain for this self-signed certificate on the ephemeral runner.
           Import-Certificate -FilePath $cerPath -CertStoreLocation 'Cert:\CurrentUser\TrustedPeople' | Out-Null
+          Import-Certificate -FilePath $cerPath -CertStoreLocation 'Cert:\CurrentUser\Root' | Out-Null
 
       - name: Set package version and generate notices
         shell: pwsh
