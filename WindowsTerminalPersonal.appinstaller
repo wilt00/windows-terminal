@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AppInstaller
+  xmlns="http://schemas.microsoft.com/appx/appinstaller/2018"
+  Version="26.822.20.1"
+  Uri="https://raw.githubusercontent.com/wilt00/windows-terminal/personal/WindowsTerminalPersonal.appinstaller">
+
+  <MainBundle
+    Name="Wilt.WindowsTerminalPersonal"
+    Publisher="CN=wilt00"
+    Version="26.822.20.1"
+    Uri="https://github.com/wilt00/windows-terminal/releases/download/nightly-v26.822.20.1/WindowsTerminalPersonal_26.822.20.1_x64.msixbundle" />
+
+  <Dependencies>
+    <Package
+      Name="Microsoft.UI.Xaml.2.8"
+      Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
+      Version="8.2310.30001.0"
+      ProcessorArchitecture="x64"
+      Uri="https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx" />
+  </Dependencies>
+
+  <UpdateSettings>
+    <OnLaunch
+      HoursBetweenUpdateChecks="12"
+      ShowPrompt="false"
+      UpdateBlocksActivation="false" />
+    <AutomaticBackgroundTask />
+    <ForceUpdateFromAnyVersion>true</ForceUpdateFromAnyVersion>
+  </UpdateSettings>
+</AppInstaller>

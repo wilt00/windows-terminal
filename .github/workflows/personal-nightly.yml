@@ -59,6 +59,7 @@ jobs:
       PERSONAL_SHA: ${{ needs.sync.outputs.personal_sha }}
       PFX_PASSWORD: ${{ secrets.NIGHTLY_SIGNING_PASSWORD }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      EXPECTED_SIGNING_THUMBPRINT: '9134032BFE82B08BB1B9401D2202F93DD26559F2'
       CL_MPCount: '2'
     steps:
       - name: Check out updated personal
@@ -86,8 +87,8 @@ jobs:
           [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:PFX_BASE64))
           $flags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
           $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, $env:PFX_PASSWORD, $flags)
-          if ($cert.Subject -ne 'CN=wilt00') {
-              throw "Unexpected signing certificate subject: $($cert.Subject)"
+          if ($cert.Subject -ne 'CN=wilt00' -or $cert.Thumbprint -ne $env:EXPECTED_SIGNING_THUMBPRINT) {
+              throw "Unexpected signing certificate: $($cert.Subject), $($cert.Thumbprint)"
           }
           New-Item artifacts/release -ItemType Directory -Force | Out-Null
           $cerPath = 'artifacts/release/WindowsTerminalPersonal.cer'
@@ -100,6 +101,14 @@ jobs:
       - name: Set package version and generate notices
         shell: pwsh
         run: |
+          $latestRelease = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=1" | ConvertFrom-Json
+          if ($latestRelease) {
+              $previousVersion = [version]($latestRelease[0].tag_name -replace '^nightly-v', '')
+              if ([version]$env:PACKAGE_VERSION -le $previousVersion) {
+                  throw "Package version $env:PACKAGE_VERSION must be greater than released version $previousVersion."
+              }
+          }
+
           $manifestPath = 'src/cascadia/CascadiaPackage/Package-Dev.appxmanifest'
           [xml]$manifest = Get-Content $manifestPath
           $manifest.Package.Identity.Version = $env:PACKAGE_VERSION
@@ -204,11 +213,39 @@ jobs:
           }
           Write-Host "Bundle signature is intact and uses the expected signer ($($signature.Status))."
 
-          Get-ChildItem artifacts/AppPackages -Recurse -Filter 'Microsoft.UI.Xaml*.appx' -File |
-              Where-Object FullName -Match '[\\/]x64[\\/]' |
-              Select-Object -First 1 |
-              Copy-Item -Destination artifacts/release
-          Copy-Item tools/Install-TerminalNightly.ps1 artifacts/release
+          # Enforce the package identity that permits in-place App Installer updates.
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $inspectionRoot = Join-Path $env:RUNNER_TEMP 'terminal-package-inspection'
+          $bundleRoot = Join-Path $inspectionRoot 'bundle'
+          $packageRoot = Join-Path $inspectionRoot 'package'
+          Remove-Item $inspectionRoot -Recurse -Force -ErrorAction Ignore
+          [IO.Compression.ZipFile]::ExtractToDirectory((Resolve-Path $bundle), $bundleRoot)
+
+          [xml]$bundleManifest = Get-Content (Join-Path $bundleRoot 'AppxMetadata/AppxBundleManifest.xml')
+          $bundleIdentity = $bundleManifest.Bundle.Identity
+          if ($bundleIdentity.Name -ne 'Wilt.WindowsTerminalPersonal' -or
+              $bundleIdentity.Publisher -ne 'CN=wilt00' -or
+              $bundleIdentity.Version -ne $env:PACKAGE_VERSION) {
+              throw "Unexpected bundle identity: $($bundleIdentity.Name), $($bundleIdentity.Publisher), $($bundleIdentity.Version)"
+          }
+
+          $innerPackages = @(Get-ChildItem $bundleRoot -Filter '*.msix' -File)
+          if ($innerPackages.Count -ne 1) {
+              throw "Expected one package in the bundle, found $($innerPackages.Count)."
+          }
+          [IO.Compression.ZipFile]::ExtractToDirectory($innerPackages[0].FullName, $packageRoot)
+          [xml]$packageManifest = Get-Content (Join-Path $packageRoot 'AppxManifest.xml')
+          $identity = $packageManifest.Package.Identity
+          if ($identity.Name -ne 'Wilt.WindowsTerminalPersonal' -or
+              $identity.Publisher -ne 'CN=wilt00' -or
+              $identity.Version -ne $env:PACKAGE_VERSION -or
+              $identity.ProcessorArchitecture -ne 'x64') {
+              throw "Unexpected package identity: $($identity.Name), $($identity.Publisher), $($identity.Version), $($identity.ProcessorArchitecture)"
+          }
+          $xaml = @($packageManifest.Package.Dependencies.PackageDependency | Where-Object Name -eq 'Microsoft.UI.Xaml.2.8')
+          if ($xaml.Count -ne 1 -or [version]$xaml[0].MinVersion -gt [version]'8.2310.30001.0') {
+              throw 'The package has an unexpected Microsoft.UI.Xaml.2.8 dependency.'
+          }
 
       - name: Upload build and test diagnostics
         if: always()
@@ -230,7 +267,7 @@ jobs:
 
           ``powershell.exe -ExecutionPolicy Bypass -File .\Install-TerminalNightly.ps1``
 
-          The versioned `.msixbundle` asset and stable package identity are suitable for a future custom WinGet manifest. The signing certificate only needs to be trusted once per machine.
+          Install through the stable [App Installer feed](https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/personal/WindowsTerminalPersonal.appinstaller) to receive automatic updates. The signing certificate only needs to be trusted once per machine.
           "@
           gh release create $tag artifacts/release/* `
               --repo $env:GITHUB_REPOSITORY `
@@ -238,3 +275,60 @@ jobs:
               --title "Windows Terminal Personal $env:PACKAGE_VERSION" `
               --notes $notes `
               --prerelease
+
+      - name: Publish App Installer feed
+        shell: pwsh
+        run: |
+          $tag = "nightly-v$env:PACKAGE_VERSION"
+          $bundleName = "WindowsTerminalPersonal_$env:PACKAGE_VERSION`_x64.msixbundle"
+          $feedUri = "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/personal/WindowsTerminalPersonal.appinstaller"
+          $bundleUri = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$tag/$bundleName"
+          $appInstallerPath = 'WindowsTerminalPersonal.appinstaller'
+
+          @"
+          <?xml version="1.0" encoding="utf-8"?>
+          <AppInstaller
+            xmlns="http://schemas.microsoft.com/appx/appinstaller/2018"
+            Version="$env:PACKAGE_VERSION"
+            Uri="$feedUri">
+
+            <MainBundle
+              Name="Wilt.WindowsTerminalPersonal"
+              Publisher="CN=wilt00"
+              Version="$env:PACKAGE_VERSION"
+              Uri="$bundleUri" />
+
+            <Dependencies>
+              <Package
+                Name="Microsoft.UI.Xaml.2.8"
+                Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
+                Version="8.2310.30001.0"
+                ProcessorArchitecture="x64"
+                Uri="https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx" />
+            </Dependencies>
+
+            <UpdateSettings>
+              <OnLaunch
+                HoursBetweenUpdateChecks="12"
+                ShowPrompt="false"
+                UpdateBlocksActivation="false" />
+              <AutomaticBackgroundTask />
+              <ForceUpdateFromAnyVersion>true</ForceUpdateFromAnyVersion>
+            </UpdateSettings>
+          </AppInstaller>
+          "@ | Set-Content $appInstallerPath -Encoding utf8NoBOM
+
+          [xml]$feed = Get-Content $appInstallerPath
+          if ($feed.AppInstaller.Version -ne $env:PACKAGE_VERSION -or
+              $feed.AppInstaller.MainBundle.Name -ne 'Wilt.WindowsTerminalPersonal' -or
+              $feed.AppInstaller.MainBundle.Publisher -ne 'CN=wilt00' -or
+              $feed.AppInstaller.MainBundle.Version -ne $env:PACKAGE_VERSION -or
+              $feed.AppInstaller.MainBundle.Uri -ne $bundleUri) {
+              throw 'Generated App Installer feed failed invariant validation.'
+          }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- $appInstallerPath
+          git commit -m "Update App Installer feed to $env:PACKAGE_VERSION"
+          git push origin HEAD:personal
