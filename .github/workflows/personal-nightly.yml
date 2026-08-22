@@ -135,6 +135,8 @@ jobs:
       - name: Build Release package and TerminalCore tests
         shell: pwsh
         run: |
+          $appxPackageDir = Join-Path (Resolve-Path .).Path 'artifacts\AppPackages'
+          New-Item $appxPackageDir -ItemType Directory -Force | Out-Null
           $arguments = @(
               'OpenConsole.slnx',
               '/t:Terminal\CascadiaPackage;Terminal\Tests\UnitTests',
@@ -147,7 +149,7 @@ jobs:
               '/p:UapAppxPackageBuildMode=SideloadOnly',
               '/p:AppxSymbolPackageEnabled=false',
               "/p:PackageCertificatePassword=$env:PFX_PASSWORD",
-              '/p:AppxPackageDir=artifacts\AppPackages\',
+              "/p:AppxPackageDir=$appxPackageDir\",
               '/p:CL_MPCount=2',
               '/m:2',
               '/nr:false'
