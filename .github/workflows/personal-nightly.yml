@@ -94,10 +94,8 @@ jobs:
           [IO.File]::WriteAllBytes(
               $cerPath,
               $cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
-          # TrustedPeople permits MSIX installation; Root lets SignTool /pa validate
-          # the complete chain for this self-signed certificate on the ephemeral runner.
+          # TrustedPeople permits MSIX installation without prompting to trust a root CA.
           Import-Certificate -FilePath $cerPath -CertStoreLocation 'Cert:\CurrentUser\TrustedPeople' | Out-Null
-          Import-Certificate -FilePath $cerPath -CertStoreLocation 'Cert:\CurrentUser\Root' | Out-Null
 
       - name: Set package version and generate notices
         shell: pwsh
@@ -190,8 +188,21 @@ jobs:
               Select-Object -First 1 -ExpandProperty FullName
           & $signTool sign /fd SHA256 /f src/cascadia/CascadiaPackage/CascadiaPackage_TemporaryKey.pfx /p $env:PFX_PASSWORD $bundle
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          & $signTool verify /pa $bundle
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Authenticode reports a self-signed certificate as untrusted even when the
+          # embedded signature is intact. Validate the signature and signer without
+          # adding the certificate to the Root store (which can prompt and hang CI).
+          $signature = Get-AuthenticodeSignature $bundle
+          $expectedCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+              'src/cascadia/CascadiaPackage/CascadiaPackage_TemporaryKey.pfx',
+              $env:PFX_PASSWORD)
+          if (-not $signature.SignerCertificate -or
+              $signature.SignerCertificate.Thumbprint -ne $expectedCert.Thumbprint) {
+              throw 'The bundle was not signed by the expected nightly certificate.'
+          }
+          if ($signature.Status -in @('NotSigned', 'HashMismatch', 'NotSupported')) {
+              throw "Bundle signature validation failed: $($signature.StatusMessage)"
+          }
+          Write-Host "Bundle signature is intact and uses the expected signer ($($signature.Status))."
 
           Get-ChildItem artifacts/AppPackages -Recurse -Filter 'Microsoft.UI.Xaml*.appx' -File |
               Where-Object FullName -Match '[\\/]x64[\\/]' |
