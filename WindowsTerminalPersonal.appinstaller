@@ -2,7 +2,7 @@
 <AppInstaller
   xmlns="http://schemas.microsoft.com/appx/appinstaller/2018"
   Version="26.823.21.1"
-  Uri="https://raw.githubusercontent.com/wilt00/windows-terminal/personal/WindowsTerminalPersonal.appinstaller">
+  Uri="https://wilt--d914dba49eb411f1acd41607ee4eb77e.web.val.run/windows-terminal.appinstaller">
 
   <MainBundle
     Name="Wilt.WindowsTerminalPersonal"

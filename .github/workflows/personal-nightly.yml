@@ -256,12 +256,26 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Publish versioned prerelease
+        shell: pwsh
+        run: |
+          $tag = "nightly-v$env:PACKAGE_VERSION"
+          $notes = @"
+          Install through the stable [App Installer feed](https://wilt--d914dba49eb411f1acd41607ee4eb77e.web.val.run/windows-terminal.appinstaller) to receive automatic updates.
+          "@
+          gh release create $tag artifacts/release/* `
+              --repo $env:GITHUB_REPOSITORY `
+              --target $env:PERSONAL_SHA `
+              --title "Windows Terminal Personal $env:PACKAGE_VERSION" `
+              --notes $notes `
+              --prerelease
+
       - name: Publish App Installer feed
         shell: pwsh
         run: |
           $tag = "nightly-v$env:PACKAGE_VERSION"
           $bundleName = "WindowsTerminalPersonal_$env:PACKAGE_VERSION`_x64.msixbundle"
-          $feedUri = "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/personal/WindowsTerminalPersonal.appinstaller"
+          $feedUri = 'https://wilt--d914dba49eb411f1acd41607ee4eb77e.web.val.run/windows-terminal.appinstaller'
           $bundleUri = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$tag/$bundleName"
           $appInstallerPath = 'WindowsTerminalPersonal.appinstaller'
 
@@ -312,17 +326,3 @@ jobs:
           git add -- $appInstallerPath
           git commit -m "Update App Installer feed to $env:PACKAGE_VERSION"
           git push origin HEAD:personal
-
-      - name: Publish versioned prerelease
-        shell: pwsh
-        run: |
-          $tag = "nightly-v$env:PACKAGE_VERSION"
-          $notes = @"
-          Install through the stable [App Installer feed](https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/personal/WindowsTerminalPersonal.appinstaller) to receive automatic updates.
-          "@
-          gh release create $tag artifacts/release/* `
-              --repo $env:GITHUB_REPOSITORY `
-              --target $env:PERSONAL_SHA `
-              --title "Windows Terminal Personal $env:PACKAGE_VERSION" `
-              --notes $notes `
-              --prerelease
