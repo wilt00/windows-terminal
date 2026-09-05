@@ -262,6 +262,10 @@ jobs:
           $tag = "nightly-v$env:PACKAGE_VERSION"
           $notes = @"
           Install through the stable [App Installer feed](https://wilt-manifests.val.run/windows-terminal.appinstaller) to receive automatic updates.
+          You'll need to trust the self-signed certificate in `WindowsTerminalPersonal.cer` before installing the MSIX bundle:
+          ```pwsh
+          Import-Certificate -FilePath "WindowsTerminalPersonal.cer" -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople'
+          ```
           "@
           gh release create $tag artifacts/release/* `
               --repo $env:GITHUB_REPOSITORY `
