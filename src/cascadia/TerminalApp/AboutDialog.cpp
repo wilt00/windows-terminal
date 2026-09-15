@@ -78,7 +78,7 @@ namespace winrt::TerminalApp::implementation
 
         try
         {
-#ifdef WT_BRANDING_DEV
+#ifdef WT_FAKE_VARIABLE
             // **DEV BRANDING**: Always sleep for three seconds and then report that
             // there is an update available. This lets us test the system.
             co_await winrt::resume_after(std::chrono::seconds{ 3 });
