@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <AppInstaller
   xmlns="http://schemas.microsoft.com/appx/appinstaller/2018"
-  Version="26.918.49.1"
+  Version="26.919.50.1"
   Uri="https://wilt-manifests.val.run/windows-terminal.appinstaller">
 
   <MainBundle
     Name="Wilt.WindowsTerminalPersonal"
     Publisher="CN=wilt00"
-    Version="26.918.49.1"
-    Uri="https://github.com/wilt00/windows-terminal/releases/download/nightly-v26.918.49.1/WindowsTerminalPersonal_26.918.49.1_x64.msixbundle" />
+    Version="26.919.50.1"
+    Uri="https://github.com/wilt00/windows-terminal/releases/download/nightly-v26.919.50.1/WindowsTerminalPersonal_26.919.50.1_x64.msixbundle" />
 
   <Dependencies>
     <Package
