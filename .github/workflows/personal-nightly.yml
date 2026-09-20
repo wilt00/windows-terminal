@@ -112,6 +112,26 @@ jobs:
           $manifestPath = 'src/cascadia/CascadiaPackage/Package-Dev.appxmanifest'
           [xml]$manifest = Get-Content $manifestPath
           $manifest.Package.Identity.Version = $env:PACKAGE_VERSION
+
+          # The packaged shell extension keeps the old MSIX loaded in a COM surrogate,
+          # which can indefinitely defer App Installer updates. The personal build does
+          # not need Explorer's "Open in Terminal" context menu, so do not register it.
+          $namespaces = [Xml.XmlNamespaceManager]::new($manifest.NameTable)
+          $namespaces.AddNamespace('f', 'http://schemas.microsoft.com/appx/manifest/foundation/windows10')
+          $namespaces.AddNamespace('com', 'http://schemas.microsoft.com/appx/manifest/com/windows10')
+          $namespaces.AddNamespace('desktop4', 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/4')
+          $shellExtensions = @($manifest.SelectNodes(
+              '/f:Package/f:Applications/f:Application/f:Extensions/com:Extension[@Category="windows.comServer"]/com:ComServer/com:SurrogateServer[@DisplayName="WindowsTerminalShellExt"]',
+              $namespaces))
+          $contextMenus = @($manifest.SelectNodes(
+              '/f:Package/f:Applications/f:Application/f:Extensions/desktop4:Extension[@Category="windows.fileExplorerContextMenus"]',
+              $namespaces))
+          if ($shellExtensions.Count -ne 1 -or $contextMenus.Count -ne 1) {
+              throw "Expected one shell extension and one Explorer context-menu registration, found $($shellExtensions.Count) and $($contextMenus.Count)."
+          }
+          [void]$shellExtensions[0].ParentNode.RemoveChild($shellExtensions[0])
+          [void]$contextMenus[0].ParentNode.RemoveChild($contextMenus[0])
+
           $manifest.Save((Resolve-Path $manifestPath))
           ./build/scripts/Generate-ThirdPartyNotices.ps1 `
               -MarkdownNoticePath ./NOTICE.md `
@@ -245,6 +265,20 @@ jobs:
           $xaml = @($packageManifest.Package.Dependencies.PackageDependency | Where-Object Name -eq 'Microsoft.UI.Xaml.2.8')
           if ($xaml.Count -ne 1 -or [version]$xaml[0].MinVersion -gt [version]'8.2310.30001.0') {
               throw 'The package has an unexpected Microsoft.UI.Xaml.2.8 dependency.'
+          }
+
+          $namespaces = [Xml.XmlNamespaceManager]::new($packageManifest.NameTable)
+          $namespaces.AddNamespace('f', 'http://schemas.microsoft.com/appx/manifest/foundation/windows10')
+          $namespaces.AddNamespace('com', 'http://schemas.microsoft.com/appx/manifest/com/windows10')
+          $namespaces.AddNamespace('desktop4', 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/4')
+          $shellExtensions = @($packageManifest.SelectNodes(
+              '/f:Package/f:Applications/f:Application/f:Extensions/com:Extension[@Category="windows.comServer"]/com:ComServer/com:SurrogateServer[@DisplayName="WindowsTerminalShellExt"]',
+              $namespaces))
+          $contextMenus = @($packageManifest.SelectNodes(
+              '/f:Package/f:Applications/f:Application/f:Extensions/desktop4:Extension[@Category="windows.fileExplorerContextMenus"]',
+              $namespaces))
+          if ($shellExtensions.Count -ne 0 -or $contextMenus.Count -ne 0) {
+              throw 'The personal package unexpectedly registers Windows Terminal Explorer integration.'
           }
 
       - name: Upload build and test diagnostics

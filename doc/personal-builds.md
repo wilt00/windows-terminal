@@ -35,7 +35,7 @@ This pulls `me/personal`, performs a `Release|x64` rebuild with limited concurre
 4. Creates and signs a versioned `.msixbundle`.
 5. Publishes an immutable, versioned GitHub prerelease.
 
-The package has the stable identity `Wilt.WindowsTerminalPersonal` and publisher `CN=wilt00`. Builds use a persistent self-signed certificate held in the repository's encrypted Actions secrets. Do not replace that certificate casually: retaining it means each machine only needs to trust the certificate once and allows later versions to upgrade the existing package.
+The package has the stable identity `Wilt.WindowsTerminalPersonal` and publisher `CN=wilt00`. It intentionally omits the Explorer "Open in Terminal" context-menu registration so that its shell extension cannot keep an old package version loaded and block automatic updates. Builds use a persistent self-signed certificate held in the repository's encrypted Actions secrets. Do not replace that certificate casually: retaining it means each machine only needs to trust the certificate once and allows later versions to upgrade the existing package.
 
 For a first install, download all release assets into one directory and run with Windows PowerShell:
 
